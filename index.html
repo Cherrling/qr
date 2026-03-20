@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>二维码生成器</title>
+	<style>
+		:root {
+			font-family: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+		}
+
+		body {
+			margin: 0;
+			padding: 24px;
+			line-height: 1.5;
+			color: #111;
+			background: #fff;
+		}
+
+		main {
+			max-width: 680px;
+			margin: 0 auto;
+			display: grid;
+			gap: 14px;
+		}
+
+		h1 {
+			margin: 0;
+			font-size: 1.25rem;
+		}
+
+		.row {
+			display: grid;
+			gap: 8px;
+		}
+
+		.inline {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+			gap: 10px;
+		}
+
+		label {
+			font-size: 0.9rem;
+			color: #333;
+		}
+
+		textarea,
+		input,
+		select,
+		button {
+			width: 100%;
+			box-sizing: border-box;
+			font: inherit;
+			padding: 8px 10px;
+			border: 1px solid #ccc;
+			border-radius: 6px;
+			background: #fff;
+		}
+
+		textarea {
+			resize: vertical;
+			min-height: 110px;
+		}
+
+		.actions {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 10px;
+		}
+
+		button {
+			cursor: pointer;
+		}
+
+		#status {
+			min-height: 1.2em;
+			font-size: 0.9rem;
+		}
+
+		#status.error {
+			color: #b00020;
+		}
+
+		#status.ok {
+			color: #065f46;
+		}
+
+		.preview {
+			display: grid;
+			place-items: center;
+			border: 1px solid #e5e7eb;
+			border-radius: 8px;
+			padding: 16px;
+			min-height: 220px;
+		}
+
+		canvas {
+			max-width: 100%;
+			height: auto;
+			image-rendering: pixelated;
+		}
+        a {
+            color: inherit;
+        }
+	</style>
+</head>
+<body>
+	<main>
+		<h1>二维码生成器（PNG）</h1>
+		<p><a href="/CyberChef/">CyberChef</a></p>
+		<p><a href="https://qrss.netlify.app/">qrs 传文件</a></p>
+
+		<div class="row">
+			<label for="textInput">输入文本</label>
+			<textarea id="textInput" placeholder="可直接粘贴文本。若同时选择文件，将优先使用文件内容。"></textarea>
+		</div>
+
+		<div class="row">
+			<label for="fileInput">或选择文件</label>
+			<input id="fileInput" type="file" />
+		</div>
+
+		<div class="inline">
+			<div class="row">
+				<label for="modulePx">每个黑白点像素（px）</label>
+				<input id="modulePx" type="number" min="1" max="40" step="1" value="4" />
+			</div>
+			<div class="row">
+				<label for="ecLevel">纠错等级</label>
+				<select id="ecLevel">
+					<option value="L">L（低，约 7%）</option>
+					<option value="M" selected>M（中，约 15%）</option>
+					<option value="Q">Q（较高，约 25%）</option>
+					<option value="H">H（高，约 30%）</option>
+				</select>
+			</div>
+		</div>
+
+		<div class="actions">
+			<button id="generateBtn" type="button">生成二维码</button>
+			<button id="downloadBtn" type="button" disabled>下载 PNG</button>
+		</div>
+
+		<div id="status" aria-live="polite"></div>
+
+		<div class="preview">
+			<canvas id="qrCanvas" hidden></canvas>
+		</div>
+	</main>
+
+	<!-- <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script> -->
+	<script src="./qrcode.min.js"></script>
+	<script>
+		const textInput = document.getElementById('textInput');
+		const fileInput = document.getElementById('fileInput');
+		const modulePxInput = document.getElementById('modulePx');
+		const ecLevelSelect = document.getElementById('ecLevel');
+		const generateBtn = document.getElementById('generateBtn');
+		const downloadBtn = document.getElementById('downloadBtn');
+		const statusEl = document.getElementById('status');
+		const qrCanvas = document.getElementById('qrCanvas');
+
+		function setStatus(message, isError = false) {
+			statusEl.textContent = message;
+			statusEl.className = isError ? 'error' : 'ok';
+		}
+
+		function bytesToBase64(bytes) {
+			let binary = '';
+			const chunkSize = 0x8000;
+			for (let i = 0; i < bytes.length; i += chunkSize) {
+				const chunk = bytes.subarray(i, i + chunkSize);
+				binary += String.fromCharCode(...chunk);
+			}
+			return btoa(binary);
+		}
+
+		async function getPayload() {
+			const file = fileInput.files[0];
+			if (file) {
+				const bytes = new Uint8Array(await file.arrayBuffer());
+				const base64 = bytesToBase64(bytes);
+				return `FILE:${file.name}\nMIME:${file.type || 'application/octet-stream'}\nBASE64:${base64}`;
+			}
+
+			const text = textInput.value.trim();
+			if (!text) {
+				throw new Error('请先输入文本，或选择一个文件。');
+			}
+			return text;
+		}
+
+		function drawQRCode(payload, modulePx, ecLevel) {
+			if (typeof qrcode !== 'function') {
+				throw new Error('二维码库加载失败，请检查网络后重试。');
+			}
+
+			const qr = qrcode(0, ecLevel);
+			qr.addData(payload, 'Byte');
+			qr.make();
+
+			const moduleCount = qr.getModuleCount();
+			const quietZone = 4;
+			const size = (moduleCount + quietZone * 2) * modulePx;
+
+			qrCanvas.width = size;
+			qrCanvas.height = size;
+			qrCanvas.hidden = false;
+
+			const ctx = qrCanvas.getContext('2d');
+			ctx.fillStyle = '#fff';
+			ctx.fillRect(0, 0, size, size);
+
+			ctx.fillStyle = '#000';
+			for (let row = 0; row < moduleCount; row++) {
+				for (let col = 0; col < moduleCount; col++) {
+					if (qr.isDark(row, col)) {
+						const x = (col + quietZone) * modulePx;
+						const y = (row + quietZone) * modulePx;
+						ctx.fillRect(x, y, modulePx, modulePx);
+					}
+				}
+			}
+
+			downloadBtn.disabled = false;
+			setStatus(`生成成功：${moduleCount}×${moduleCount} 模块，${modulePx}px/模块，纠错 ${ecLevel}`);
+		}
+
+		async function generateQRCode() {
+			try {
+				downloadBtn.disabled = true;
+				setStatus('正在生成二维码...');
+
+				const modulePx = Number(modulePxInput.value);
+				if (!Number.isInteger(modulePx) || modulePx < 1 || modulePx > 40) {
+					throw new Error('每个黑白点像素请填写 1 到 40 的整数。');
+				}
+
+				const payload = await getPayload();
+				const ecLevel = ecLevelSelect.value;
+				drawQRCode(payload, modulePx, ecLevel);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : '生成失败，请重试。';
+				setStatus(message, true);
+			}
+		}
+
+		generateBtn.addEventListener('click', generateQRCode);
+
+		let debounceTimer = null;
+		function scheduleAutoGenerate() {
+			if (debounceTimer) {
+				clearTimeout(debounceTimer);
+			}
+			debounceTimer = setTimeout(() => {
+				generateQRCode();
+			}, 150);
+		}
+
+		textInput.addEventListener('input', scheduleAutoGenerate);
+		fileInput.addEventListener('change', scheduleAutoGenerate);
+		modulePxInput.addEventListener('input', scheduleAutoGenerate);
+		ecLevelSelect.addEventListener('change', scheduleAutoGenerate);
+
+		downloadBtn.addEventListener('click', () => {
+			if (downloadBtn.disabled) return;
+			const a = document.createElement('a');
+			a.href = qrCanvas.toDataURL('image/png');
+			a.download = 'qrcode.png';
+			a.click();
+		});
+	</script>
+</body>
+</html>
